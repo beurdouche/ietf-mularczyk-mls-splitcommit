@@ -86,80 +86,197 @@ This is motivated by academic research {{HKP22}}, {{HKPPW22}}, {{AHKM33}}.
 {::boilerplate bcp14-tagged}
 
 
-# Transcript Hashes
+# Key Schedule
 
-TODO instead of the whole commit, use proposals. Everything else we care for is
-in the context.  
+Split commits require an additional MAC key derived from the epoch secret.
+
+| Label               | Secret                | Purpose                                               |
+|:--------------------|:----------------------|:------------------------------------------------------|
+| "split commit auth" | `split_commit_auth`   | Computing a MAC on a split commit for removed members |
 
 
 # Split Commits
 
-The following structure describes a split commit which group members upload and
-download instead of regular commits.
+Apart from regular commits, group members upload and download a new type of
+MlsMessage called SplitCommitMessage. It contains a SplitUpdatePath object
+which the DS can pre-process before delivering by removing unnecessary
+ciphertexts. Further, it contains a `split_commit_message` MlsMessage which is
+a framed SplitCommit object. It can be a PublicMessage in which case it's only
+signed, or a PrivateMessage in which case it's signed and encrypted. Finally,
+it contains a `mac_tag` which is delivered only to members removed by this
+commit. It is a MAC over SplitCommit with a key derived from the current
+epoch's key schedule.
 
 ~~~ tls-presentation
 struct {
-    opaque epoch_identifier<V>;
-    ProposalOrRef proposals<V>;
-    /* SignWithLabel(., "SplitCommitTBS", SplitCommitTBS) */
-    opaque signature<V>;
-    optional<UpdatePath> path; // TODO consider using MLS Commit struct
-    optional<opaque> mac_tag<V>; // TODO how to make optional blob?
-} SplitCommit;
+    UpdatePathNode nodes<V>;
+} SplitUpdatePath;
 
 struct {
     opaque epoch_identifier<V>;
     ProposalOrRef proposals<V>;
-} SplitCommitTBS;
+    optional<LeafNode> leaf_node;
+} SplitCommit;
+
+struct {
+    MLSMessage split_commit_message;
+    optional<SplitUpdatePath> path;
+    optional<MAC> mac_tag;
+} SplitCommitMessage;
 ~~~
 
-A committing group member generates SplitCommit using the following steps:
+The SplitCommit object is a new content type and SplitCommitMessage is a new
+wire format. Other MLS objects account for this as specified below.
+
+~~~ tls-presentation
+enum {
+    reserved(0),
+    application(1),
+    proposal(2),
+    commit(3),
+    split_commit(4),
+    (255)
+} ContentType;
+
+struct {
+    opaque signature<V>;
+    select (FramedContent.content_type) {
+        case commit:
+            MAC confirmation_tag;
+        case application:
+        case proposal:
+        case split_commit:
+            struct{};
+    };
+} FramedContentAuthData;
+
+struct {
+    opaque group_id<V>;
+    uint64 epoch;
+    Sender sender;
+    opaque authenticated_data<V>;
+
+    ContentType content_type;
+    select (FramedContent.content_type) {
+        case application:
+          opaque application_data<V>;
+        case proposal:
+          Proposal proposal;
+        case commit:
+          Commit commit;
+        case split_commit:
+          SplitCommit split_commit;
+    };
+} FramedContent;
+
+struct {
+    ProtocolVersion version = mls10;
+    WireFormat wire_format;
+    select (MLSMessage.wire_format) {
+        case mls_public_message:
+            PublicMessage public_message;
+        case mls_private_message:
+            PrivateMessage private_message;
+        case mls_welcome:
+            Welcome welcome;
+        case mls_group_info:
+            GroupInfo group_info;
+        case mls_key_package:
+            KeyPackage key_package;
+        case mls_split_commit:
+            SplitCommitMessage split_commit_message;
+    };
+} MLSMessage;
+~~~
+
+A committing group member generates a SplitCommitMessage using the following
+steps:
 1. Perform a regular MLS commit, without message framing.
 2. Export a secret `epoch_identifier` from the new epoch with the label
    "SplitCommit".
-3. Generate `signature` using SignWithLabel(., "SplitCommitTBS",
-   SplitCommitTBS) where SplitCommitTBS contains `epoch_identifier` from
-   Step 2 and `proposals` from the commit generated in Step 1.
-4. If the commit removes a member, compute `mac_tag = MAC(membership_key,
-   SplitCommitTBS)`.
-   [TODO: make new MAC key]
-5. Output SplitCommit with `proposals` and `path` from the commit from Step 1,
-   `epoch_identifier` from Step 2, `signature` from Step 3 and `mac_tag` from
-   Step 4 if generated.
+3. Generate a SplitCommit object `split_commit` with `epoch_identifier` from
+   Step 2 and `leaf_node` from `path` in the commit generated in Step 1.
+4. If the commit removes a member, compute `mac_tag = MAC(split_commit_auth,
+   split_commit)`.
+5. Generate MlsMessage `split_commit_message` by framing `split_commit`.
+6. Output SplitCommitMesage with `path` including `nodes` from `path` in the
+   commit in Step 1, `epoch_identifier` from Step 2, `mac_tag` from Step 4 if
+   generated and `split_commit_message` from Step 5.
 
-The DS processes a SplitCommit before delivering it to a receiver group member
-as follows:
+If the DS knows the ratchet trees before and after the split commit, it
+processes a SplitCommitMessage before delivering it to a receiver group
+member as follows:
 1. If the receiver remains in the group after the commit:
   * Remove from `path` all ciphertexts except the one that the receiver will
     decrypt.
   * Remove from `path` all nodes for which the receiver can derive public keys,
     that is all nodes on the path from the LCA of the receiver and the
     committer to the root (inclusive)
-    [TODO: this will likely NOT work since AFAIR the NEW context is used to do
+    [**TODO: this will likely NOT work since AFAIR the NEW context is used to do
     HPKE encryption, so we need all path to decrypt. I don’t know how this
-    helps security in any way.]
+    helps security in any way.**]
   * Remove the `mac_tag`
 2. Else if the commit removes the receiver
   * Remove the `path`
+{{Delivering Split Commits without the Ratchet Tree}} considers DS's that do not
+know the ratchet tree.
 
 A receiver group member who remains in the group after the commit processes a
-SplitCommit using the following steps:
-1. Verify that `path` contains exactly one ciphertext.
-2. Process `path` and `proposals` as a regular MLS commit.
-3. Export a secret `epoch_identifier` from the new epoch with the label
-   "SplitCommit".
-4. Verify `signature` on `SplitCommitTBS` containing `epoch_identifier` and
-   `proposals`.
+SplitCommitMessage using the following steps:
+1. Process the `split_commit_message` MLSMessage to recover `split_commit`.
+2. Verify that `path` contains exactly one ciphertext. Recover `path_secret` by
+   decrypting that ciphertext.
+3. Use `path_secret`, public keys from `path` and `proposals` to process the
+   commit as specified in {{!RFC9420}}.
+4. Verify that `epoch_identifier` in `split_commit` matches the secret exported
+   from the new epoch with the label "SplitCommit" .
 
-A receiver group member who is removed in the commit processes it by verifying
+A receiver group member who is removed in the commit processes it by processing
+the `split_commit_message` MLSMessage to recover `split_commit` and verifying
 all of the following:
-* `mac_tag` is a valid MAC on `SplitCommitTBS` and
-* `signature` is a valid signature on `SplitCommitTBS` and
+* `mac_tag` is a valid MAC on `split_commit` and
 * one of `proposals` removes it.
+
+
+# Transcript Hashes
+
+With split commits, the input to the confirmed transcript hash is the same as
+in {{!RFC9420}}. In particular, it contains the FramedContent with a
+SplitCommit object inside. Split commits contain no confirmation tags, so the
+interim transcript hash is simply equal to the confirmed transcript hash.
+
+
+# Delivering Split Commits without the Ratchet Tree
+
+If the DS does not know the ratchet tree, then it cannot determine which
+ciphertexts to deliver to which members. Dealing with this is outside the scope
+of this document.
+
+In general, there are several ways to deal with this. For example, the sender
+can annotate the ciphertexts in the split commit. Alternatively, the receiver
+can "pull" the split commit without `path`, identify the sender and indicate
+the index of the ciphertext it expects before pulling it. However, most DS's
+work in the push not pull model and are therefore incompatible with this
+solution.
+
 
 # Security Considerations
 
-TODO Security
+## Transcript Hashes
+
+The transcript hash with split commits covers FramedContent with a SplitCommit
+that contains `epoch_identifier`, `proposals` and `leaf_node`. The transcript
+hash with regular commits covers FramedContent with a Commit that contains
+`proposals`, `leaf_node` and `path`, as well as the confirmation tag.
+
+Since `epoch_identifier` is derived from the key schedule and the tree hash of
+the new epoch is mixed into the key schedule, the transcript hash with split
+commits binds the public keys from `path`. There is no security-related reason
+to agree on ciphertexts, so there is no reason to include `path` in the
+transctipt hash. Note that group members do agree on *content* of the
+ciphertexts in `path`. That is, they agree on the commit secret hashed into
+the key schedule (and used to derive `epoch_identifier`), so they also agree
+on all path secrets that they can derive (assuming no hash collisions).
 
 
 # IANA Considerations
