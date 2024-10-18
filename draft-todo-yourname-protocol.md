@@ -60,25 +60,88 @@ informative:
 
 This document describes an extension to the MLS protocol {{!RFC940}} that
 improves its efficiency in terms of per-member download size. This comes at
-esssentially no cost. In essence, this document defines a new message type
+essentially no cost. In essence, this document defines a new message type
 called split commit which replaces regular MLS commits. Unlike regular commits,
 a split commit can be "split" by the Delivery Service (DS) into much smaller
-split commits, one for each receiving member. The size of a downloaded split
+per-member commits, one for each receiving member. The size of a per-member
 commit is always logarithmic in the group size, while the size of a regular
 MLS commit can be linear. This extension works in settings with a DS that can
 do the splitting which can be demanding with encrypted MLS handshake messages.
+This is motivated by academic research {{HKP22}}, {{HKPPW22}}, {{AHKM33}}.
 
 
 --- middle
 
 # Introduction
 
-The MLS protocol requires a Delivery Service (DS), one function of which is to
-distribute protocol packets between group members.
+## Protocol Overview
 
-TODO Introduction
+Consider the example ratchet tree from {{Section 7.4 of !RFC9420}}:
 
-This is motivated by academic research {{HKP22}}, {{HKPPW22}}, {{AHKM33}}.
+~~~ aasvg
+      Y
+      |
+    .-+-.
+   /     \
+  X       Z[C]
+ / \     / \
+A   B   C   D
+
+0   1   2   3
+~~~
+{: #evolution-tree title="A Full Tree with One Unmerged Leaf" }
+
+In a group with a ratchet tree of this form, if member 0 were to commit, they
+would compute two updated path secrets X' and Y', and three encrypted versions
+of these path secrets:
+
+1. X' encrypted to B
+2. Y' encrypted to C
+3. Y' encrypted to D
+
+With a normal MLS Commit, all three of these encrypted values are sent to each
+other member -- even though each member can only decrypt one of the encrypted
+values.  Since the number of encrypted values can grow linearly as the size of
+the group, in the worst case, this creates quadratic data to be transmitted.
+
+With split Commits, each member receives only what they decrypt.  The
+committer can make individual messages for each member, or they can emit a
+single message with all encrypted values, which the DS can use to construct
+per-member messages.  We call the per-member messages PerMemberCommits, and the
+message carrying all of the encrypted values a SplitCommit.
+
+~~~ aasvg
+A          B          C          D
+| E(B; X') |          |          |
++--------->|          |          |
+|          |          |          |
+| E(C; Y') |          |          |
++-------------------->|          |
+|          |          |          |
+| E(D; Y') |          |          |
++------------------------------->|
+|          |          |          |
+~~~
+{: #server-aided-direct title="A committer creates per-member commits" }
+
+~~~ aasvg
+A          DS         B          C          D
+| E(B; X') |          |          |          |
+| E(C; Y') |          |          |          |
+| E(D; Y') |          |          |          |
++--------->|          |          |          |
+|          |          |          |          |
+|          | E(B; X') |          |          |
+|          +--------->|          |          |
+|          |          |          |          |
+|          | E(C; Y') |          |          |
+|          +-------------------->|          |
+|          |          |          |          |
+|          | E(D; Y') |          |          |
+|          +------------------------------->|
+|          |          |          |          |
+~~~
+{: #server-aided-ds title="The DS creates per-member commits" }
 
 
 # Conventions and Definitions
@@ -88,12 +151,27 @@ This is motivated by academic research {{HKP22}}, {{HKPPW22}}, {{AHKM33}}.
 
 # Split Commits
 
-Apart from regular commits, group members upload and download a new type of
-MlsMessage called SplitCommitMessage. It contains a SplitUpdatePath object
-which the DS can pre-process before delivering by removing unnecessary
-ciphertexts. Further, it contains a `split_commit_message` MlsMessage which is
-a framed SplitCommit object. It can be a PublicMessage in which case it's only
-signed, or a PrivateMessage in which case it's signed and encrypted.
+A Split Commit uploaded to the DS consists of two parts.  First, it contains a
+SplitUpdatePath object which is a regular UpdatePath defined in {!RFC9420}}
+but without the committer's LeafNode. Second, it contains a `split_commit_message`
+MlsMessage (PublicMessage or PrivateMessage) which includes an epoch identifier,
+the committed list of proposals and the committer's LeafNode.
+
+The `split_commit_message` is signed and encrypted, while SplitUpdatePath is not.
+The reason is that the DS includes in per-member commits only parts of the
+SplitUpdatePath and receivers can still verify authenticity and decrypt all that
+is needed. (The `split_commit_message` must be delivered in full but its size is
+worst-case logarithmic.) The lack of encryption for SplitUpdatePath is not a problem
+because it contains only HPKE public keys and ciphertexts. The proposals and
+LeafNode (the latter containing a credential) are encrypted. 
+
+The purpose of the epoch identifier is to provide authenticity. In particular,
+with Split Commit, the committer does not sign the HPKE keys they chose for their
+updated path in the ratchet tree. However, we need authenticity for these keys
+(else the adversary can replace them by their own). Thus, the committer signs instead
+(as part of message framing) the epoch identifier that binds the tree hash of the new
+epoch. In particular, the epoch identifier is derived from the new epoch's key
+schedule.
 
 ~~~ tls-presentation
 struct {
@@ -111,6 +189,14 @@ struct {
     MLSMessage split_commit_message;
     optional<SplitUpdatePath> path;
 } SplitCommitMessage;
+
+struct {
+    // PrivateMessage or PublicMessage
+    // content_type = split_commit
+    MLSMessage split_commit_message;
+
+    optional<HPKECiphertext> encrypted_path_secret;
+} PerMemberCommit;
 ~~~
 
 The SplitCommit object is a new content type and SplitCommitMessage is a new
@@ -190,26 +276,18 @@ steps:
    from Step 4.
 
 If the DS knows the ratchet trees before and after the split commit, it
-processes a SplitCommitMessage before delivering it to a receiver group
-member as follows:
-1. If the receiver remains in the group after the commit:
-  * Remove from `path` all ciphertexts except the one that the receiver will
-    decrypt.
-  * Remove from `path` all nodes for which the receiver can derive public keys,
-    that is all nodes on the path from the LCA of the receiver and the
-    committer to the root (inclusive)
-    [**TODO: this will likely NOT work since AFAIR the NEW context is used to do
-    HPKE encryption, so we need all path to decrypt. I don’t know how this
-    helps security in any way.**]
-2. Else if the commit removes the receiver
-  * Remove the `path`
+generates a PerMemberCommit for a receiver group member from a SplitCommit
+member as follows by choosing from the SplitUpdatePath only the HPKECiphertext
+for the receiver. If the SplitCommit does not contain the SplitUpdatePath
+or the commit removes the receiver, the PerMemberCommit does not include
+the HPKECiphertext.
+
 {{Delivering Split Commits without the Ratchet Tree}} considers DS's that do not
 know the ratchet tree.
 
-A receiver group member processes a SplitCommitMessage using the following steps:
+A receiver group member processes a PerMemberCommit using the following steps:
 1. Process the `split_commit_message` MLSMessage to recover `split_commit`.
-2. Verify that `path` contains exactly one ciphertext. Recover `path_secret` by
-   decrypting that ciphertext.
+2. Recover `path_secret` decrypting that HPKECiphertext.
 3. Use `path_secret`, public keys from `path` and `proposals` to process the
    commit as specified in {{!RFC9420}}.
 4. Verify that `epoch_identifier` in `split_commit` matches the secret exported
