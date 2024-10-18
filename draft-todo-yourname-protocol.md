@@ -86,15 +86,6 @@ This is motivated by academic research {{HKP22}}, {{HKPPW22}}, {{AHKM33}}.
 {::boilerplate bcp14-tagged}
 
 
-# Key Schedule
-
-Split commits require an additional MAC key derived from the epoch secret.
-
-| Label               | Secret                | Purpose                                               |
-|:--------------------|:----------------------|:------------------------------------------------------|
-| "split commit auth" | `split_commit_auth`   | Computing a MAC on a split commit for removed members |
-
-
 # Split Commits
 
 Apart from regular commits, group members upload and download a new type of
@@ -102,10 +93,7 @@ MlsMessage called SplitCommitMessage. It contains a SplitUpdatePath object
 which the DS can pre-process before delivering by removing unnecessary
 ciphertexts. Further, it contains a `split_commit_message` MlsMessage which is
 a framed SplitCommit object. It can be a PublicMessage in which case it's only
-signed, or a PrivateMessage in which case it's signed and encrypted. Finally,
-it contains a `mac_tag` which is delivered only to members removed by this
-commit. It is a MAC over SplitCommit with a key derived from the current
-epoch's key schedule.
+signed, or a PrivateMessage in which case it's signed and encrypted.
 
 ~~~ tls-presentation
 struct {
@@ -119,9 +107,9 @@ struct {
 } SplitCommit;
 
 struct {
+    // PrivateMessage or PublicMessage
     MLSMessage split_commit_message;
     optional<SplitUpdatePath> path;
-    optional<MAC> mac_tag;
 } SplitCommitMessage;
 ~~~
 
@@ -196,12 +184,10 @@ steps:
    "SplitCommit".
 3. Generate a SplitCommit object `split_commit` with `epoch_identifier` from
    Step 2 and `leaf_node` from `path` in the commit generated in Step 1.
-4. If the commit removes a member, compute `mac_tag = MAC(split_commit_auth,
-   split_commit)`.
-5. Generate MlsMessage `split_commit_message` by framing `split_commit`.
-6. Output SplitCommitMesage with `path` including `nodes` from `path` in the
-   commit in Step 1, `epoch_identifier` from Step 2, `mac_tag` from Step 4 if
-   generated and `split_commit_message` from Step 5.
+4. Generate MlsMessage `split_commit_message` by framing `split_commit`.
+5. Output SplitCommitMesage with `path` including `nodes` from `path` in the
+   commit in Step 1, `epoch_identifier` from Step 2 and `split_commit_message`
+   from Step 4.
 
 If the DS knows the ratchet trees before and after the split commit, it
 processes a SplitCommitMessage before delivering it to a receiver group
@@ -215,14 +201,12 @@ member as follows:
     [**TODO: this will likely NOT work since AFAIR the NEW context is used to do
     HPKE encryption, so we need all path to decrypt. I don’t know how this
     helps security in any way.**]
-  * Remove the `mac_tag`
 2. Else if the commit removes the receiver
   * Remove the `path`
 {{Delivering Split Commits without the Ratchet Tree}} considers DS's that do not
 know the ratchet tree.
 
-A receiver group member who remains in the group after the commit processes a
-SplitCommitMessage using the following steps:
+A receiver group member processes a SplitCommitMessage using the following steps:
 1. Process the `split_commit_message` MLSMessage to recover `split_commit`.
 2. Verify that `path` contains exactly one ciphertext. Recover `path_secret` by
    decrypting that ciphertext.
@@ -230,12 +214,6 @@ SplitCommitMessage using the following steps:
    commit as specified in {{!RFC9420}}.
 4. Verify that `epoch_identifier` in `split_commit` matches the secret exported
    from the new epoch with the label "SplitCommit" .
-
-A receiver group member who is removed in the commit processes it by processing
-the `split_commit_message` MLSMessage to recover `split_commit` and verifying
-all of the following:
-* `mac_tag` is a valid MAC on `split_commit` and
-* one of `proposals` removes it.
 
 
 # Transcript Hashes
