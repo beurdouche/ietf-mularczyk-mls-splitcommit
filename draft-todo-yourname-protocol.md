@@ -19,40 +19,34 @@
 # Change the file extension to match the format (.xml for XML, etc...)
 #
 ###
-title: "TODO - Your title"
-abbrev: "TODO - Abbreviation"
-category: info
+title: "MLS Split Commits"
+category: std
 
-docname: draft-todo-yourname-protocol-latest
+docname: draft-todo-mularczyk-protocol-latest
 submissiontype: IETF  # also: "independent", "editorial", "IAB", or "IRTF"
 number:
 date:
 consensus: true
 v: 3
-area: AREA
-workgroup: WG Working Group
+area: sec
+workgroup: mls
 keyword:
- - next generation
- - unicorn
- - sparkling distributed ledger
-venue:
-  group: WG
-  type: Working Group
-  mail: WG@example.com
-  arch: https://example.com/WG
-  github: USER/REPO
-  latest: https://example.com/LATEST
 
 author:
  -
-    fullname: Your Name Here
-    organization: Your Organization Here
-    email: your.email@example.com
+    fullname: Joël Alwen
+    organization: Amazon
+    email: alwenjo@amazon.com
+ -
+    fullname: Marta Mularczyk
+    organization: Amazon
+    email: mulmarta@amazon.com
+
 
 normative:
 
 informative:
-  HKP22: DOI.10.1145/3548606.35606
+  KKP22: DOI.10.1145/3548606.3560679
   HKPPW22: DOI.10.1145/3460120.3484817
   AHKM22: DOI.10.1145/3548606.3560632
 
@@ -67,7 +61,7 @@ per-member commits, one for each receiving member. The size of a per-member
 commit is always logarithmic in the group size, while the size of a regular
 MLS commit can be linear. This extension works in settings with a DS that can
 do the splitting which can be demanding with encrypted MLS handshake messages.
-This is motivated by academic research {{HKP22}}, {{HKPPW22}}, {{AHKM33}}.
+This is motivated by academic research {{KKP22}}, {{HKPPW22}}, {{AHKM22}}.
 
 
 --- middle
@@ -282,7 +276,7 @@ for the receiver. If the SplitCommit does not contain the SplitUpdatePath
 or the commit removes the receiver, the PerMemberCommit does not include
 the HPKECiphertext.
 
-{{Delivering Split Commits without the Ratchet Tree}} considers DS's that do not
+Section 5 considers DS's that do not
 know the ratchet tree.
 
 A receiver group member processes a PerMemberCommit using the following steps:
