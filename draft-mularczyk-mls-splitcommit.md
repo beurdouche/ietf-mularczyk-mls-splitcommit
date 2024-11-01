@@ -9,19 +9,19 @@ number:
 date:
 consensus: true
 v: 3
-area: AREA
-workgroup: MLS
+area: "Security"
+workgroup: "Messaging Layer Security"
 keyword:
  - next generation
  - unicorn
  - sparkling distributed ledger
 venue:
-  group: WG
-  type: Working Group
-  mail: WG@example.com
-  arch: https://example.com/WG
-  github: USER/REPO
-  latest: https://example.com/LATEST
+  group: "Messaging Layer Security"
+  type: "Working Group"
+  mail: "mls@ietf.org"
+  arch: "https://mailarchive.ietf.org/arch/browse/mls/"
+  github: "beurdouche/ietf-mularczyk-mls-splitcommit"
+  latest: "https://beurdouche.github.io/ietf-mularczyk-mls-splitcommit/draft-mularczyk-mls-splitcommit.html"
 
 author:
  -
