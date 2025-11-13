@@ -342,46 +342,51 @@ transcript hash.
 
 ## Authenticating and Encrypting Split Commits
 
-Both in an SCommit and in a IndividualCommit, the SHeader objects are
-signed and encrypted, while SUpdatePath and IndividualUpdatePath are not. This
-lack of encryption compared to MLS is not a problem because the SUpdatePath
-doesn't contain secrets (only public keys and ciphertexts). The (more
-sensetive) proposals and LeafNode are encrypted as part of the
-SHeader.
+Both in an SCommit and in a IndividualCommit, the SHeader objects are signed and
+either MAC'ed or encrypted, while SUpdatePath and IndividualUpdatePath are not.
 
 The lack of signature (and MAC) for an SUpdatePath stems from the fact that
-members receive IndividualCommit messages with different parts
-of the original SUpdatePath object. Without the missing parts of SUPdatePath
-they can not verify any signature (or MAC) over the full object. If instead,
-a signature (or MAC) covering the IndividualUpdatePath then it becomes
-impossible for third parties (such as the DS) to convert an SCommit into an
-IndividualCommit.
+members receive IndividualCommit messages with different parts of the original
+SUpdatePath object. Without the missing parts of SUPdatePath they can not verify
+any signature (or MAC) over the full object.
 
-Fortunately, authenticating just the SHeader part does suffice to
-still ensure the same security for splittable commits as provided by a
-regular MLS commits.
+### Encryption
+The lack of encryption compared to MLS is not a problem because the SUpdatePath
+doesn't contain secrets (only public keys and ciphertexts). The (more
+sensetive) proposals and LeafNode are encrypted as part of the SHeader.
 
-In MLS, commiters sign the confirmation tag (and the receivers recomputing them
-to check the signature). This serves two purposes. First, it forces the sender
-to demonstrate knowledge of the new epoch's key schedule to receivers
-(preventing attacks where a commit is somehow manipulated while in transit by
-an adversary knowing only the sender's signing key). Second, it ensures all
-receivers that accept a given commit will always agree on any application
-relevant properties about the new epoch.
+### Authentication
+Fortunately, authenticating just the SHeader does suffice to still ensure the
+same security for splittable commits as provided by a regular MLS commits.
 
-SCommits enjoy the same two properties by signing SHeader and
-using epoch identifiers in place of confirmation tags. A confirmation tag in
-MLS the confirmation binds everything about `path` (including the ciphertexts)
-because `path` is fed into the new key schedule (via the transcript hash).
-However, MLS only does this as way to get confirmation tags to bind the
-*plaintexts* and public keys in `path`. (Since MLS does not use key-committing
-encryption for payloads it also binds the keys used for decryption in the
-confirmation tag.) Luckily, for an SCommit, An epoch identifier does bind those
-values. After all, the identifier is derived from the new key schedule which is
-derived (in part) from the previous `commit_secret` which binds the plaintexts
-in `path`. Further, the new key schedule is also derived from the epoch's
-`tree_hash` and that (together with the previous epoch's `tree_hash` which is
-also in the derivation path) binds the new public keys in `path`.
+Both an MLS Commit and an SHeader are signed and either encrypted or MAC'ed
+during a process called message framing. Framing constructs an object called
+FramedContent that contains the Commit or SHeader as well as context such as
+sender and epoch id. The FramedContent is signed together with the group context
+in the old epoch. Then the FramedContent together with the signature is either
+MAC'ed (if PublicMessage is used) or encrypted with an AEAD scheme (if
+PrivateMessage is used).
+
+The goal of the above mechanism is to guarantee authenticity as long as either
+the committer's signing key or the old epoch's group key is secure. This
+property is the same for MLS and split commits extension, because an SHeader
+binds the same information as an MLS Commit.
+
+Both Commit and SHeader contain the committer's new leaf and proposals. A Commit
+additionally contains the new HPKE public keys on committers direct path and all
+HPKE ciphertexts. An SHeader additionally contains `epoch_identifier` derived
+from the new epoch.
+
+The `epoch_identifier` binds the new HPKE public keys, because the new tree hash
+is fed into the new epoch's key schedule via the new group context. It also
+binds the information carried in the HPKE ciphertexts, that is, the new HPKE
+secret keys and the commit secret. The reason is that the commit secret is also
+fed into the new epoch's key schedule. Moreover, the commit secret binds the
+HPKE secret keys, because they are derived from the same path secrets used also
+to derive the commit secret.
+
+### Confirmation Tag
+[TODO]
 
 
 # IANA Considerations
